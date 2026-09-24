@@ -1,0 +1,30 @@
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert');
+const html = fs.readFileSync(require('path').join(__dirname, '../public/index.php'),'utf8');
+const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(x=>x[1]);
+let source = scripts.at(-1).replace(/<\?php echo json_encode\(\$sins,[\s\S]*?\?>/, '[]').replace(/<\?= json_encode\(\$_SESSION\['csrf'\]\) \?>/, '"test-token"');
+const elements = {output:{innerText:''},newSin:{value:'I ate the last slice.'},confirmation:{style:{}},subtitleText:{innerText:''}};
+let payload, message;
+const context = vm.createContext({document:{getElementById:id=>elements[id]},window:{},FormData,Math,alert:m=>{message=m},setTimeout:()=>{},location:{reload(){}},fetch:async(url,opts)=>{assert.equal(url,'submit_sin.php');payload=opts.body;return {ok:true,text:async()=> 'ok'}}});
+vm.runInContext(source,context);
+vm.runInContext('generate()',context);
+assert.match(elements.output.innerText,/No confessions/);
+vm.runInContext('sins.push("I ate the last slice."); generate()',context);
+assert.equal(elements.output.innerText,"I ate the last slice... but at least I'm not fucking kids.");
+vm.runInContext('sins[0] = "<img onerror=alert(1)>"; generate()',context);
+assert.match(elements.output.innerText, /<img/); // Written as text, not HTML.
+(async()=>{
+vm.runInContext('submitSin({preventDefault(){}})',context);
+await new Promise(setImmediate);
+assert.equal(payload.get('csrf'),'test-token');
+assert.equal(payload.get('sin'),'I ate the last slice');
+assert.equal(elements.confirmation.style.display,'block');
+assert.equal(elements.newSin.value,'');
+context.fetch=async()=>({ok:false,status:429});
+vm.runInContext('submitSin({preventDefault(){}})',context);
+await new Promise(setImmediate);
+assert.match(message,/wait a minute/);
+for(const match of html.replace(/<\?[\s\S]*?\?>/g,'null').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
+console.log('Frontend syntax, empty state, generator, text rendering, submission payload, success, and cooldown checks passed.');
+})();
